@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_sqlite, mbstring
+          coverage: none
+          tools: composer:v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: composer install --no-interaction --prefer-dist --no-progress
+      - name: PHPUnit
+        run: vendor/bin/phpunit
+      - name: PHPStan
+        run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
+      - name: PHP CS Fixer
+        run: vendor/bin/php-cs-fixer fix --dry-run --diff
+        env:
+          PHP_CS_FIXER_IGNORE_ENV: '1'
+      - name: PAP/1 conformance against examples/standalone
+        run: sh tests/conformance/run.sh
+
+  mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: pap
+          MYSQL_DATABASE: pap
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h127.0.0.1 -uroot -ppap"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: pdo_mysql, mbstring
+          coverage: none
+          tools: composer:v2
+      - run: composer install --no-interaction --prefer-dist --no-progress
+      - name: PHPUnit, MySQL adapter variants
+        run: vendor/bin/phpunit --filter Mysql
+        env:
+          PRINTDOCK_TEST_MYSQL_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=pap;charset=utf8mb4'
+          PRINTDOCK_TEST_MYSQL_USER: root
+          PRINTDOCK_TEST_MYSQL_PASSWORD: pap

@@ -1,0 +1,9 @@
+parameters:
+    level: max
+    paths:
+        - src
+        - tests
+        - examples
+    excludePaths:
+        - tests/conformance
+    tmpDir: var/phpstan

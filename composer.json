@@ -1,0 +1,45 @@
+{
+    "name": "printdock/server",
+    "description": "Framework-agnostic server side of PAP/1, the PrintDock print agent protocol.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.2",
+        "ext-json": "*",
+        "psr/clock": "^1.0"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.64",
+        "nyholm/psr7": "^1.8",
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^11.5",
+        "psr/http-factory": "^1.0",
+        "psr/http-message": "^2.0",
+        "psr/http-server-handler": "^1.0"
+    },
+    "suggest": {
+        "ext-pdo": "Needed by the PDO adapters (SQLite and MySQL 8+ / MariaDB 10.6+)",
+        "psr/http-server-handler": "Needed by PrintDock\\Server\\Http\\Psr15Handler",
+        "psr/http-factory": "Needed by PrintDock\\Server\\Http\\Psr15Handler",
+        "psr/http-message": "Needed by PrintDock\\Server\\Http\\Psr15Handler"
+    },
+    "autoload": {
+        "psr-4": {
+            "PrintDock\\Server\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "PrintDock\\Server\\Tests\\": "tests/",
+            "PrintDock\\Server\\Examples\\": "examples/standalone/src/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse --memory-limit=1G",
+        "cs": "php-cs-fixer fix --dry-run --diff"
+    }
+}
