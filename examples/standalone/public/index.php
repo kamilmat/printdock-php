@@ -6,8 +6,9 @@ declare(strict_types=1);
  * Front controller for `php -S 127.0.0.1:8099 examples/standalone/public/index.php`.
  *
  *   PRINTDOCK_DB         SQLite file (default var/standalone.sqlite)
- *   PRINTDOCK_BASE_URL   public origin agents use, for content_url (default: derived from the Host header)
- *   PRINTDOCK_ADMIN_TOKEN  when set, /admin requires header X-Admin-Token
+ *   PRINTDOCK_BASE_URL   public origin agents use, for content_url (default http://127.0.0.1:8099)
+ *   PRINTDOCK_ADMIN_TOKEN  required: /admin demands header X-Admin-Token and answers 403 without it
+ *   PRINTDOCK_ADMIN_OPEN=1 admin API without a token (the conformance run only; never expose the example)
  *
  * PAP lives under /pap/v1, the admin API under /admin (see AdminApi).
  */
@@ -26,8 +27,7 @@ $databaseFile = $env('PRINTDOCK_DB', dirname(__DIR__, 3) . '/var/standalone.sqli
 if (!is_dir(dirname($databaseFile))) {
     mkdir(dirname($databaseFile), 0777, true);
 }
-$host = is_string($_SERVER['HTTP_HOST'] ?? null) ? $_SERVER['HTTP_HOST'] : '127.0.0.1';
-$baseUrl = $env('PRINTDOCK_BASE_URL', 'http://' . $host);
+$baseUrl = $env('PRINTDOCK_BASE_URL', 'http://127.0.0.1:8099');
 // PRINTDOCK_CLAIM_COOLDOWN=0 only for test tools that claim back to back (the conformance suite does)
 $runtime = new Runtime($databaseFile, $baseUrl, '0' !== $env('PRINTDOCK_CLAIM_COOLDOWN', '1'));
 
@@ -52,7 +52,7 @@ if (str_starts_with($path, Runtime::PAP_PREFIX)) {
             return new DateTimeImmutable('now', new DateTimeZone('UTC'));
         }
     };
-    $admin = new AdminApi($runtime->admin, $clock, $env('PRINTDOCK_ADMIN_TOKEN', '') ?: null, rtrim($baseUrl, '/') . Runtime::PAP_PREFIX);
+    $admin = new AdminApi($runtime->admin, $clock, $env('PRINTDOCK_ADMIN_TOKEN', '') ?: null, rtrim($baseUrl, '/') . Runtime::PAP_PREFIX, '1' === $env('PRINTDOCK_ADMIN_OPEN', ''));
     $response = $admin->handle($method, substr($path, strlen('/admin')), $headers, $body);
 } else {
     $response = HttpResponse::json(200, ['service' => 'printdock-standalone-example', 'pap' => Runtime::PAP_PREFIX, 'admin' => '/admin']);

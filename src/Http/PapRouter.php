@@ -26,6 +26,9 @@ final class PapRouter
 {
     private const MAX_DISCOVERY_BODY = 262144;
 
+    /** Default cap on any request body; far above a real `hello`, `claim` or `ack`. */
+    public const DEFAULT_MAX_BODY = 524288;
+
     private readonly string $prefix;
 
     /** @var (callable(\Throwable): void)|null */
@@ -34,11 +37,14 @@ final class PapRouter
     /**
      * @param (callable(\Throwable): void)|null $onError called for every unexpected exception, which then
      *                                                   becomes a 500 `server_error` without its message
+     * @param int                               $maxBodyBytes larger bodies are refused with 400 `bad_request` (the catalogue
+     *                                                        has no 413) once the caller is authenticated
      */
     public function __construct(
         private readonly PapServer $server,
         string $prefix = '/pap/v1',
         ?callable $onError = null,
+        private readonly int $maxBodyBytes = self::DEFAULT_MAX_BODY,
     ) {
         $this->prefix = rtrim($prefix, '/');
         $this->onError = $onError;
@@ -84,6 +90,9 @@ final class PapRouter
     {
         $this->server->checkVersion($headers['x-pap-version'] ?? null);
         $agent = $this->server->authenticate($headers['authorization'] ?? null);
+        if (strlen($body) > $this->maxBodyBytes) {
+            throw ProtocolError::badRequest(sprintf('body exceeds %d KiB', intdiv($this->maxBodyBytes, 1024)));
+        }
         $parts = array_values(array_filter(explode('/', $rel), static fn (string $p): bool => '' !== $p));
         $count = count($parts);
 

@@ -162,14 +162,18 @@ PHP_VERSION=8.2 make all    # on a different PHP version
 ### Example
 
 ```
+export PRINTDOCK_ADMIN_TOKEN=$(openssl rand -hex 16)
 php -S 127.0.0.1:8099 examples/standalone/public/index.php
-curl -s -XPOST localhost:8099/admin/agents -d '{"name":"demo","printers":[{"printer_id":"p1","role":"label","transport":"socket","address":"10.0.0.15:9100","language":"zpl","dpi":203,"media":"100x150mm"}]}'
-curl -s -XPOST localhost:8099/admin/jobs -d '{"agent_id":"<agent_id>","printer_id":"p1","content_text":"^XA^FDhello^FS^XZ"}'
+curl -s -H "X-Admin-Token: $PRINTDOCK_ADMIN_TOKEN" -XPOST localhost:8099/admin/agents -d '{"name":"demo","printers":[{"printer_id":"p1","role":"label","transport":"socket","address":"10.0.0.15:9100","language":"zpl","dpi":203,"media":"100x150mm"}]}'
+curl -s -H "X-Admin-Token: $PRINTDOCK_ADMIN_TOKEN" -XPOST localhost:8099/admin/jobs -d '{"agent_id":"<agent_id>","printer_id":"p1","content_text":"^XA^FDhello^FS^XZ"}'
 # agent: server_url = http://127.0.0.1:8099/pap/v1, key from the response to the first command
 ```
 
-PAP lives under `/pap/v1`, the mini admin under `/admin` (the shape the conformance suite expects; optional header
-`X-Admin-Token`, variable `PRINTDOCK_ADMIN_TOKEN`). Database file: `PRINTDOCK_DB` (default `var/standalone.sqlite`).
+PAP lives under `/pap/v1`, the mini admin under `/admin` (the shape the conformance suite expects; header
+`X-Admin-Token`, variable `PRINTDOCK_ADMIN_TOKEN`, required: without it the admin API answers 403, unless
+`PRINTDOCK_ADMIN_OPEN=1`, which only the conformance run sets). Public origin for `content_url`: `PRINTDOCK_BASE_URL`
+(default `http://127.0.0.1:8099`). Database file: `PRINTDOCK_DB` (default `var/standalone.sqlite`).
+**Never expose the example to a network**: it is a test fixture, not a hardened service.
 
 ### Conformance
 
@@ -249,8 +253,11 @@ foreign server: `python3 tests/conformance/server_conformance.py --url … --key
   (e.g. unreadable stored station data) is a 500 `server_error` and goes to `onError`.
 - **`PapAdmin::cancel($id, $onlyIf)`**: with the second argument (e.g. `JobState::Queued`) it cancels only a job that
   is still in that state — checked under the same row lock as the change, otherwise `AdminException::CONFLICT`.
-- **`purgeHistory()`** in the PDO adapter first locks the ids of closed jobs (in batches of 500), then deletes their
-  events and the jobs themselves by that list — a job closed in the meantime leaves no orphaned events.
+- **`purgeHistory()`** in the PDO adapter first locks the ids of closed jobs (in batches of 500, each batch its own
+  transaction), then deletes their events and the jobs themselves by that list — a job closed in the meantime leaves
+  no orphaned events. Do not call it inside your own transaction: the batches would join it and hold their locks to the end.
+- **Request size**: `PapRouter` refuses bodies over 512 KiB (4th constructor argument `$maxBodyBytes`) with 400
+  `bad_request`, after authentication; `hello` takes at most 256 `printers` and `seen_printers` and 64 entries per capability list.
 - Queueing and a scan request always lift the claim limit, without reading the agent's state (no race with an empty claim).
 - `Printer` accepts `rotate` as text (`"90"`) in the constructor and stores a number, like `fromArray()`.
 

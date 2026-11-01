@@ -10,6 +10,9 @@ namespace PrintDock\Server\Domain;
  */
 final class HelloReport
 {
+    public const MAX_PRINTERS = 256;
+    public const MAX_LIST = 64;
+
     /**
      * @param list<string>                $formats
      * @param list<array<string, mixed>>  $seenPrinters
@@ -44,11 +47,21 @@ final class HelloReport
         if (!in_array($state, ['active', 'paused'], true)) {
             throw new \InvalidArgumentException('agent.state must be active or paused');
         }
+        foreach ($caps as $name => $value) {
+            if (is_array($value) && count($value) > self::MAX_LIST) {
+                throw new \InvalidArgumentException(sprintf('capabilities.%s may hold at most %d entries', $name, self::MAX_LIST));
+            }
+        }
         Input::stringList($caps, 'transports');
         $formats = Input::stringList($caps, 'formats');
 
+        $seenList = Input::optionalList($data, 'seen_printers');
+        $printers = Input::optionalList($data, 'printers');
+        if (count($seenList) > self::MAX_PRINTERS || count($printers) > self::MAX_PRINTERS) {
+            throw new \InvalidArgumentException(sprintf('seen_printers and printers may hold at most %d entries', self::MAX_PRINTERS));
+        }
         $seen = [];
-        foreach (Input::optionalList($data, 'seen_printers') as $entry) {
+        foreach ($seenList as $entry) {
             if (is_array($entry)) {
                 /** @var array<string, mixed> $entry */
                 $seen[] = $entry;
@@ -65,7 +78,7 @@ final class HelloReport
             $formats,
             true === ($caps['discovery'] ?? false),
             $seen,
-            Input::optionalList($data, 'printers'),
+            $printers,
             Input::optionalString($data, 'config_version', 64),
             Input::optionalString($data, 'last_error', 500),
             Input::optionalInt($data, 'spooled_jobs', 0),

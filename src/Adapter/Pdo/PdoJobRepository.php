@@ -257,18 +257,22 @@ final class PdoJobRepository implements JobRepository
         return $this->db->run($sql, $params)->rowCount();
     }
 
-    /** How many jobs {@see purgeHistory()} locks and deletes per round. */
-    private const PURGE_BATCH = 500;
+    /** How many jobs {@see purgeHistory()} locks and deletes per round (one transaction each). */
+    public const PURGE_BATCH = 500;
 
+    /**
+     * Each batch of {@see PURGE_BATCH} jobs is its own transaction, so locks are held for one batch at a time and
+     * claims and acks interleave between batches. A host must not call this inside its own transaction: the
+     * batches would then join it and the locks would last the whole purge.
+     */
     public function purgeHistory(\DateTimeImmutable $closedBy): int
     {
         $time = PdoSupport::formatTime($closedBy);
-
-        return $this->db->transactional(function () use ($time): int {
+        $deleted = 0;
+        do {
             // The ids are locked first and both deletes use that list: a job an ack or sweep closes in between
             // is neither deleted without its events nor leaves events behind.
-            $deleted = 0;
-            do {
+            $batch = $this->db->transactional(function () use ($time): array {
                 $ids = array_map(
                     static fn (array $r): string => PdoSupport::string($r['job_id']),
                     $this->db->fetchRows(
@@ -277,15 +281,17 @@ final class PdoJobRepository implements JobRepository
                     ),
                 );
                 if ([] === $ids) {
-                    break;
+                    return [0, 0];
                 }
                 $in = implode(', ', array_fill(0, count($ids), '?'));
                 $this->db->run("DELETE FROM printdock_job_events WHERE job_id IN ($in)", $ids);
-                $deleted += $this->db->run("DELETE FROM printdock_jobs WHERE job_id IN ($in)", $ids)->rowCount();
-            } while (self::PURGE_BATCH === count($ids));
 
-            return $deleted;
-        });
+                return [count($ids), $this->db->run("DELETE FROM printdock_jobs WHERE job_id IN ($in)", $ids)->rowCount()];
+            });
+            $deleted += $batch[1];
+        } while (self::PURGE_BATCH === $batch[0]);
+
+        return $deleted;
     }
 
     public function earliestNotBefore(AgentId $agentId, \DateTimeImmutable $now): ?\DateTimeImmutable

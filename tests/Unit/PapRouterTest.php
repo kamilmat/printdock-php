@@ -249,6 +249,33 @@ final class PapRouterTest extends TestCase
         self::assertSame(400, $response->status);
     }
 
+    public function test_bodies_over_the_configured_limit_are_bad_request_only_for_authenticated_callers(): void
+    {
+        $agent = $this->stack->register();
+        $router = new PapRouter($this->stack->server, Stack::PREFIX, null, 1024);
+        $good = ['X-PAP-Version' => '1', 'Authorization' => 'Bearer ' . $agent->key];
+        $big = '{"pad":"' . str_repeat('x', 2000) . '"}';
+
+        $refused = $router->handle('POST', Stack::PREFIX . '/hello', $good, $big);
+        $anonymous = $router->handle('POST', Stack::PREFIX . '/hello', ['X-PAP-Version' => '1'], $big);
+
+        self::assertSame(400, $refused->status);
+        self::assertSame('bad_request', $this->body($refused)['error']);
+        self::assertSame(401, $anonymous->status);
+        self::assertSame(400, (new PapRouter($this->stack->server))->handle('POST', Stack::PREFIX . '/hello', $good, '{"pad":"' . str_repeat('x', PapRouter::DEFAULT_MAX_BODY) . '"}')->status);
+    }
+
+    public function test_hello_reports_with_too_many_printers_or_capability_entries_are_bad_request(): void
+    {
+        $agent = $this->stack->register();
+        $many = array_fill(0, 257, ['printer_id' => 'p']);
+
+        self::assertSame(400, $this->stack->hello($agent, ['seen_printers' => $many])->status);
+        self::assertSame(400, $this->stack->hello($agent, ['printers' => $many])->status);
+        self::assertSame(400, $this->stack->hello($agent, ['capabilities' => ['layout' => array_fill(0, 65, 'x')]])->status);
+        self::assertSame(200, $this->stack->hello($agent, ['seen_printers' => array_slice($many, 0, 256)])->status);
+    }
+
     public function test_release_offers_the_update_channels_answer_with_server_time(): void
     {
         $provider = new class () implements ReleaseProvider {

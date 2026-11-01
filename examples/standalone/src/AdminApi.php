@@ -26,7 +26,8 @@ use Psr\Clock\ClockInterface;
 /**
  * A tiny admin surface for the example: create agents, enqueue jobs, read states, ask for a printer scan.
  * Shaped like the test admin API the conformance suite drives with
- * `--admin-url`. A real host puts its own authorisation and UI here instead.
+ * `--admin-url`. A real host puts its own authorisation and UI here instead. Not for exposure: it needs an
+ * admin token, and without one it answers 403 to everything unless started explicitly open (tests only).
  */
 final class AdminApi
 {
@@ -35,6 +36,7 @@ final class AdminApi
         private readonly ClockInterface $clock,
         private readonly ?string $token,
         private readonly string $papBaseUrl,
+        private readonly bool $open = false,
     ) {
     }
 
@@ -43,7 +45,11 @@ final class AdminApi
      */
     public function handle(string $method, string $rel, array $headers, string $body): HttpResponse
     {
-        if (null !== $this->token && ($headers['x-admin-token'] ?? '') !== $this->token) {
+        if (null === $this->token || '' === $this->token) {
+            if (!$this->open) {
+                return $this->error(403, 'forbidden', 'set PRINTDOCK_ADMIN_TOKEN to use the admin API');
+            }
+        } elseif (!hash_equals($this->token, $headers['x-admin-token'] ?? '')) {
             return $this->error(401, 'unauthorized', 'X-Admin-Token required');
         }
 
@@ -250,7 +256,6 @@ final class AdminApi
             'stored_status' => $job->state()->value,
             'attempt' => $job->attempt(),
             'title' => $job->title(),
-            'lease_token' => $job->leaseToken()?->value,
             'created_at' => Time::iso($job->createdAt()),
             'expires_at' => Time::iso($job->expiresAt()),
             'lease_until' => Time::isoOrNull($job->leaseUntil()),

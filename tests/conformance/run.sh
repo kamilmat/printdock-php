@@ -9,6 +9,8 @@ DB="$(pwd)/var/conformance.sqlite"
 mkdir -p var
 rm -f "$DB" "$DB-wal" "$DB-shm"
 export PRINTDOCK_DB="$DB"
+export PRINTDOCK_ADMIN_OPEN=1
+export PRINTDOCK_BASE_URL="http://127.0.0.1:$PORT"
 
 php -S "127.0.0.1:$PORT" examples/standalone/public/index.php >var/conformance-server.log 2>&1 &
 SERVER_PID=$!
