@@ -244,6 +244,17 @@ foreign server: `python3 tests/conformance/server_conformance.py --url … --key
 - `GET /release` only through the port; there is no built-in update channel or `POST /enroll` (reserved in PAP/1).
 - Jobs from before 0.6 have no events (the timeline starts at the first change after the upgrade) and no `printer_name`.
 
+## Changes in 0.7.1
+
+- `IppUri::check()` accepts the scheme in any case (`IPP://…`, RFC 3986) and returns it lower-case, as the agent reads
+  it; a port of `0` stays refused, as in the agent.
+- New reason code `unsupported_attribute` (the printer refused a job setting, usually the paper size or copies) in
+  `ReasonCode::KNOWN`. PROTOCOL 6.5/9.5 updated with the PrintDock agent 0.7.1: an `ipp` printer is sent the job
+  whenever it is idle and accepting jobs; any unclear answer to a sent `Print-Job` is `uncertain`, never `failed`;
+  `printer_error` and `unsupported_document` may come as `uncertain`; landscape `media` is turned onto the paper.
+  An agent lists `ipp` also without a PDF library: configure `pdf` jobs for an `ipp` printer only when its
+  `capabilities.layout` is present.
+
 ## Changes in 0.7
 
 - **Transport `ipp`** (PROTOCOL 9.5, added to PAP/1 without a version change): `PrinterTransport::Ipp`, a network

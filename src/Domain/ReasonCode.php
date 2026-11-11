@@ -22,6 +22,7 @@ final class ReasonCode
         'unknown_queue', 'queue_not_accepting', 'bad_file', 'cups_interrupted', 'cancelled_in_queue', 'spool_error',
         'spool_lost', 'spooler_unavailable',
         'media_empty', 'media_jam', 'printer_offline', 'printer_stopped', 'unsupported_document', 'unsupported_media',
+        'unsupported_attribute',
     ];
 
     /**

@@ -23,6 +23,7 @@ final class IppUriTest extends TestCase
         self::assertSame('10.0.0.7', IppUri::check('ipp://10.0.0.7:631/ipp/print')['host']);
         self::assertSame('127.0.0.1', IppUri::check('ipp://127.0.0.1:8631/ipp/print')['host']);
         self::assertSame('fe80::1', IppUri::check('ipp://[fe80::1]/ipp/print')['host']);
+        self::assertSame('ipps', IppUri::check('IPPS://10.0.0.1/x')['scheme']);  // RFC 3986: scheme is case-insensitive
     }
 
     /**
@@ -40,6 +41,8 @@ final class IppUriTest extends TestCase
         yield 'fragment' => ['ipp://10.0.0.1/ipp/print#x'];
         yield 'space' => ['ipp://10.0.0.1/ipp/pr int'];
         yield 'port' => ['ipp://10.0.0.1:99999/ipp/print'];
+        yield 'port zero' => ['ipp://10.0.0.1:0/ipp/print'];
+        yield 'empty port' => ['ipp://10.0.0.1:/ipp/print'];
         yield 'no host' => ['ipp:///ipp/print'];
         yield 'empty' => [''];
     }

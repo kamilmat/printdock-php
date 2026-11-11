@@ -6,7 +6,8 @@ namespace PrintDock\Server\Domain;
 
 /**
  * The address of an `ipp` printer (section 4.3): `ipp://host[:port]/path` or `ipps://host[:port]/path`, default port
- * 631, no user info, query or fragment. A host given as an IP address must be on the local network (loopback,
+ * 631 (an explicit port 1-65535; `:0` and an empty port are refused), no user info, query or fragment. The scheme is
+ * case-insensitive (RFC 3986 3.1) and comes back lower-case, as the agent reads it. A host given as an IP address must be on the local network (loopback,
  * link-local, RFC 1918, IPv6 ULA) - the same rule the agent applies to `socket` and `ipp` targets before it connects,
  * so a server UI refuses what the station would refuse anyway. A host name passes: only the station's resolver knows
  * what it points to, and the agent checks that.
@@ -20,7 +21,7 @@ final class IppUri
      */
     public static function check(string $uri): array
     {
-        if (!preg_match('~^(ipps?)://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?(/[^\s?#\\\\]*)?$~', $uri, $m)) {
+        if (!preg_match('~^((?i)ipps?)://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?(/[^\s?#\\\\]*)?$~', $uri, $m)) {
             throw new \InvalidArgumentException('an ipp printer address must be ipp://host[:port]/path or ipps://host[:port]/path');
         }
         $port = isset($m[3]) && '' !== $m[3] ? (int) $m[3] : 631;
@@ -35,7 +36,7 @@ final class IppUri
             throw new \InvalidArgumentException('ipp printer address '.$host.' is outside the local network (loopback, link-local, RFC 1918, IPv6 ULA)');
         }
 
-        return ['scheme' => $m[1], 'host' => $host, 'port' => $port, 'path' => $m[4] ?? '/ipp/print'];
+        return ['scheme' => strtolower($m[1]), 'host' => $host, 'port' => $port, 'path' => $m[4] ?? '/ipp/print'];
     }
 
     public static function isLocal(string $ip): bool

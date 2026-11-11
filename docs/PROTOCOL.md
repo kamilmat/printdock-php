@@ -154,7 +154,7 @@ additionally whenever its list of system printers changes.
 | `agent.arch` | yes | `amd64`, `arm64`, `386`, `arm` |
 | `agent.hostname` | yes | machine name, informational |
 | `agent.state` | no | `active` (default when absent) or `paused`: the operator stopped printing on this station (local control in the PrintDock agent). A paused agent keeps sending `hello` and acks but sends no `claim`; the server SHOULD show the state and MUST NOT treat the missing claims as a fault. Added in PAP/1 without a version change (section 1: fields are only added) |
-| `capabilities.transports` | yes | subset of `socket`, `spooler`, `cups`, `ipp` (section 9). `ipp` was added in PAP/1 without a version change; a server MUST NOT configure an `ipp` printer for an agent that does not list it |
+| `capabilities.transports` | yes | subset of `socket`, `spooler`, `cups`, `ipp` (section 9). `ipp` was added in PAP/1 without a version change; a server MUST NOT configure an `ipp` printer for an agent that does not list it. Listing `ipp` covers `zpl`/`epl`/`raw` over IPP; `pdf` over IPP needs the agent's own page layout, announced by `capabilities.layout` (9.3) |
 | `capabilities.formats` | yes | subset of `zpl`, `epl`, `raw`, `pdf`, `png` |
 | `capabilities.raster_languages` | no | printer languages the agent can rasterise `pdf` into without a driver (today: `zpl`); default `[]` |
 | `capabilities.pdf_driver` | no | `true` if the agent can print `pdf` through a system driver (`spooler`/`cups`); default `false` |
@@ -503,7 +503,7 @@ it next to `detail`. The codes the PrintDock agent sends:
 | `spool_error` | `uncertain` | Windows: the job left the queue while its last status showed an error |
 | `spool_lost` | `uncertain` | the job is no longer in the queue, and the agent could not watch that queue for a while before (spooler restarting or unreachable, agent restarted) and has not seen the job listed again since. A restarting spooler can lose jobs and reuse their numbers, so after such a gap only a positive answer counts as `printed`: CUPS job history with the job's title, or the Windows `PRINTED`/`COMPLETE` bits |
 | `printer_unreachable` | `failed` | the TCP connection to the printer was refused, timed out or had no route (`ipp`: also a TLS handshake that failed) |
-| `printer_io_error` | `failed` or `uncertain` | the connection broke while sending: `failed` before the first byte, `uncertain` after some bytes left (`ipp`: `uncertain` whenever `Print-Job` broke off after the connection opened) |
+| `printer_io_error` | `failed` or `uncertain` | the connection broke while sending: `failed` before the first byte, `uncertain` after some bytes left (`ipp`: `uncertain` whenever `Print-Job` broke off after the connection opened and the printer did not refuse it first, 9.5 step 5) |
 | `bad_printer_address` | `failed` | the configured `address` is not `host:port` (`ipp`: not an `ipp://` / `ipps://` URI, or the printer answers HTTP 404 / 426 or IPP `client-error-not-found` for it), or resolves outside the local network (loopback, link-local, RFC 1918, IPv6 ULA) while `allow_public_printer_addresses` is off in the agent config |
 | `spooler_error`, `driver_error` | `failed` | a Windows spooler / printer driver call failed (the OS message is in `detail`) |
 | `unknown_queue`, `queue_not_accepting`, `bad_file` | `failed` | `lp` reached a running cupsd and it refused the job: no such queue, queue not accepting jobs, unreadable file (the CUPS message is in `detail`). `unknown_queue` is also what the agent itself answers, before submitting, for a queue name that is not a local queue (Windows: a UNC path or a name the spooler does not list). `queue_not_accepting` is also an `ipp` printer with `printer-is-accepting-jobs` false or IPP `server-error-not-accepting-jobs` |
@@ -515,12 +515,13 @@ it next to `detail`. The codes the PrintDock agent sends:
 | `content_unavailable` | `failed` | `content_url` answered 4xx |
 | `agent_stopped` | `uncertain` | the agent stopped between claim and send (11.3) |
 | `internal_error` | `failed` | an unexpected exception in the agent |
-| `media_empty`, `media_jam` | `failed` or `uncertain` | `ipp`: the printer reports no paper (`media-empty`, `media-needed`) or a jam (`media-jam`) in `printer-state-reasons`: before the job was sent (`failed`), or when the job was aborted or timed out (`uncertain` once a page may have come out) |
+| `media_empty`, `media_jam` | `failed` or `uncertain` | `ipp`: the printer reports no paper (`media-empty`, `media-needed`) or a jam (`media-jam`) in `printer-state-reasons`: while it is stopped or not accepting jobs, so the job is not sent (`failed`), or when the job was aborted or timed out (`failed` with no impression, `uncertain` once a page may have come out) |
 | `printer_offline`, `printer_stopped` | `failed` or `uncertain` | `ipp`: the printer is offline or shutting down (`offline`, `shutdown`, `timed-out`, `connecting-to-device`), or stopped for another reason (`printer-state` stopped, `door-open`, `cover-open`, `toner-empty`, `marker-supply-empty`, `input-tray-missing`, `output-area-full`, `paused`) |
 | `unsupported_media` | `failed` | `ipp`: the printer offers no paper of the printer's `media` size (nor a custom range that holds it); the list it offers is in `detail` |
-| `unsupported_document` | `failed` | `ipp`: the printer takes neither `application/pdf` nor `image/pwg-raster` in a form the agent writes (for a
-`zpl`/`epl`/`raw` job: lists no format for it), or refused the document (`client-error-document-format-not-supported`, `-format-error`, job aborted with `document-format-error`) |
-| `printer_error` | `failed` | any other transport error (`ipp`: also an IPP or HTTP refusal not listed above, with the printer's `status-message` in `detail`) |
+| `unsupported_document` | `failed` or `uncertain` | `ipp`: the printer takes neither `application/pdf` nor `image/pwg-raster` in a form the agent writes (for a
+`zpl`/`epl`/`raw` job: lists no format for it), or refused the document (`client-error-document-format-not-supported`, `-format-error`, HTTP 413 too large, also when sent before the upload finished, HTTP 415): `failed`; the job aborted with `document-format-error`: `failed` with no impression, else `uncertain` |
+| `unsupported_attribute` | `failed` | `ipp`: the printer refused a job setting the agent sent (`client-error-attributes-or-values-not-supported`, `-conflicting-attributes`): usually the paper size (`media`) or `copies`. The paper configured on the printer should be checked; the printer's message is in `detail` |
+| `printer_error` | `failed` or `uncertain` | any other transport error (`ipp`: an IPP or HTTP refusal not listed above, HTTP 401/403, with the printer's `status-message` in `detail`: `failed`; an answer to a sent `Print-Job` that is neither a refusal nor a valid IPP response, or a job aborted after an impression: `uncertain`) |
 
 **Giving a job back.** PAP/1 has no call that releases a job (`release` in this document is the update check).
 When the spooler provably took nothing (CUPS: `lp` failed without a job id and cupsd does not answer an IPP request
@@ -643,7 +644,7 @@ already is what the printer executes.
 | `zpl` | ok if `language: zpl` | ok only if the agent sends it raw to the queue (`cups`: `lp -o raw`, `spooler`: RAW datatype) and the queue is known to pass bytes; otherwise `unsupported_route` | ok if `language: zpl`, sent unchanged when the printer lists a format for it (9.5), else `failed` / `unsupported_document`; `unsupported_route` for `language: driver` |
 | `epl` | ok if `language: epl` | same as above | same, `language: epl` |
 | `raw` | ok | same as above | same, any `language` but `driver` |
-| `pdf` | ok only if the printer language is in `capabilities.raster_languages` | ok if `capabilities.pdf_driver` | ok if `capabilities.transports` has `ipp` (any `language`) |
+| `pdf` | ok only if the printer language is in `capabilities.raster_languages` | ok if `capabilities.pdf_driver` | ok if `capabilities.transports` has `ipp` and `capabilities.layout` is present (the agent lays pages out itself; any `language`); otherwise `unsupported_route` |
 
 An agent never guesses: a route not in the table is `rejected` /
 `unsupported_route` immediately, without trying.
@@ -668,35 +669,59 @@ no driver and no system queue: the same route works on Windows (x64 and ARM), Li
 2. asks `Get-Printer-Attributes` (`printer-state`, `printer-state-reasons`, `printer-is-accepting-jobs`,
    `document-format-supported`, `media-supported`, `media-default`, `media-col-database`, `media-*-margin-supported`,
    `pwg-raster-document-resolution-supported`, `pwg-raster-document-type-supported`, `copies-supported`,
-   `print-scaling-supported`, `print-color-mode-supported`). No answer: `failed` / `printer_unreachable`. A printer
-   that is stopped, not accepting jobs, or reports an error-level reason (6.5) is not sent the job: `failed` with the
-   matching reason, safe to reprint;
+   `print-scaling-supported`, `print-color-mode-supported`). No answer: `failed` / `printer_unreachable`. Whether the
+   job is sent is decided by `printer-state` and `printer-is-accepting-jobs` alone: a printer that is stopped or not
+   accepting jobs is not sent it (`failed`, safe to reprint), with the reason named after its `printer-state-reasons`
+   when they say why (6.5: `media_empty`, `printer_offline`, ...), else `printer_stopped` / `queue_not_accepting`. An
+   idle or busy printer that accepts jobs is sent the job even when it reports an error-level reason (it may concern
+   a tray or supply the job does not use); the reason is noted in `detail`, and if the printer cannot print, the
+   job's own state says so (step 6);
 3. picks the paper for the printer's `media`: the `media-supported` size nearest to it, either orientation, within
    3 mm per side (so `100x150mm` finds a printer's `oe_4x6-label_4x6in`, 101.6×152.4 mm; the page is laid out on the
    printer's size), else a custom size inside the printer's `custom_min_…`/`custom_max_…` range (sent as `media-col`
    with `media-size`). A printer without that paper is `failed` / `unsupported_media`: a label is never scaled onto
-   the printer's default paper. The paper's unprintable edges come from `media-col-database`, else the largest
-   `media-*-margin-supported`;
+   the printer's default paper. The paper keeps the orientation the printer feeds it in; when `media` is the other
+   way round (`150x100mm` on a 4×6 in roll, `297x210mm` on A4) the page is laid out for `media` and turned 90°
+   clockwise onto the paper (`rotate` + 90; `auto` decides by itself), so the label comes out at the size a ZPL
+   printer set up for `media` would print it, not shrunk. The paper's unprintable edges come from
+   `media-col-database`, else the largest `media-*-margin-supported`;
 4. prepares the document exactly as for a driver route (9.2: `fit` and `rotate` by the agent, inside the printable
    area): `application/pdf` with pages of the paper's size when the printer lists it, else `image/pwg-raster`
    (PWG 5102.4) rendered at the advertised square resolution nearest the printer's `dpi` (the `dpi` itself when
    offered, e.g. 203 for a label printer), `srgb_8` on a printer that prints colour, otherwise `sgray_8`
-   (`black_1` as a last resort). Neither format: `failed` /
+   (`black_1` as a last resort); the sheet's pixel and point size are libcups' (`cupsRasterInitPWGHeader`, used by
+   `ippeveprinter` and cups-filters): the size in 1/100 mm times the resolution, rounded down (A4 at 300 dpi is
+   2480 × 3507 px, 595 × 841 pt; 50 mm at 203 dpi is 399 px). Neither format: `failed` /
    `unsupported_document`. `copies` goes as the `copies` attribute when `copies-supported` allows it, otherwise the
-   document is repeated (collated);
-5. sends `Print-Job` (`job-name` = PAP `job_id`, `media`, `print-scaling=none` when supported). An IPP refusal is
-   `failed` (6.5 maps the status); a connection that broke after it opened is `uncertain` / `printer_io_error`;
+   document is repeated (collated); either way pages × copies count against the agent's sheet limit (below);
+5. sends `Print-Job` (`job-name` = PAP `job_id`, `media`, `print-scaling=none` when supported). An IPP error status
+   or an explicit HTTP refusal (401, 403, 404, 413, 415, 426) is `failed` (6.5 maps it), also when the printer sends
+   it before it has read the whole document and stops reading (the agent reads such an early answer before it gives
+   up); a connection that broke after it opened is `uncertain` / `printer_io_error`; any other answer once the job
+   was sent (another HTTP status, a body that is not a complete IPP response with the request's `request-id`) is
+   `uncertain` / `printer_error` - the printer had the whole job, so `failed`, which makes the server print again,
+   could print the label twice;
 6. asks `Get-Job-Attributes` about once a second until the job ends: `completed` → `printed`; `aborted` or
    `canceled` → `failed` when `job-impressions-completed` is 0, else `uncertain`, with the reason taken from
    `job-state-reasons` / `printer-state-reasons`; the printer no longer knowing the job → `printed` (`uncertain` /
    `spool_lost` after unanswered questions). When the hard timeout (`print_timeout_s`, 11.13) runs out, the agent
-   sends `Cancel-Job`: `failed` if the job was cancelled while still waiting, held or stopped with no impression,
-   else `uncertain`; the reason is the printer's (e.g. `media_empty`) when it names one, else `print_timeout`.
+   sends `Cancel-Job` and then asks `Get-Job-Attributes` once more, because the job may have started between the
+   last answer and the cancel: `completed` → `printed`; `failed` only if the cancel went through and the job had not
+   started printing before or after it (last seen pending, held or stopped, now one of those or canceled/aborted,
+   or no longer known; no impression); otherwise (printing, an impression, no answer) `uncertain`. The reason is the
+   printer's (e.g. `media_empty`) when it names one, else `print_timeout`.
 
 A `zpl`, `epl` or `raw` job (printer `language` not `driver`) goes over IPP unchanged, without `media` or scaling
 attributes, as `application/vnd.zebra-zpl` (`zpl`) or `application/vnd.eltron-epl` (`epl`) when the printer lists
 it, else as `application/octet-stream` when listed; otherwise `failed` / `unsupported_document` before anything is
-sent - such a printer takes its language on the raw port (`socket`). Steps 2, 5 and 6 apply as for PDF.
+sent - such a printer takes its language on the raw port (`socket`). Steps 2, 5 and 6 apply as for PDF. This needs
+no PDF library, so an agent lists `ipp` in `capabilities.transports` without one; `pdf` over IPP needs
+`capabilities.layout` (9.3).
+
+**Limits** (the PrintDock agent; a job over them fails before anything is sent, safe to reprint): a PDF has at most
+200 pages and pages × `copies` at most 1000 sheets, also when the printer makes the copies (`bad_content`); one page
+bitmap at most 128 MB in memory (A4 or Letter at 600 dpi in colour fits; `render_error`), and the prepared document
+(PWG raster stream or laid-out PDF, all pages and copies) at most 256 MB (`render_error`).
 
 The agent acks only the final outcome (never `spooled`), and extends the lease while it waits (5.6). **TLS:** an
 `ipps://` printer on a private address (loopback, link-local, RFC 1918, IPv6 ULA) is accepted with its self-signed
