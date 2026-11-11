@@ -16,6 +16,7 @@ use PrintDock\Server\Port\AgentRepository;
 /**
  * Agents in `printdock_agents` (SQLite or MySQL). `save` writes only administrative columns of an existing row,
  * `recordHello`, `recordActivity` and `recordClaimResult` only theirs, so concurrent requests of one agent cannot undo each other.
+ * Key columns change only through `setPendingKey` and the conditional `promotePendingKey`.
  */
 final class PdoAgentRepository implements AgentRepository
 {
@@ -69,9 +70,26 @@ final class PdoAgentRepository implements AgentRepository
 
     public function findByKeyId(string $keyId): ?Agent
     {
-        $row = $this->db->fetchRow('SELECT * FROM printdock_agents WHERE key_id = ?', [$keyId]);
+        $row = $this->db->fetchRow('SELECT * FROM printdock_agents WHERE key_id = ? OR pending_key_id = ?', [$keyId, $keyId]);
 
         return null === $row ? null : $this->hydrate($row);
+    }
+
+    public function setPendingKey(AgentId $id, string $keyId, string $keyHash): void
+    {
+        $this->db->run(
+            'UPDATE printdock_agents SET pending_key_id = ?, pending_key_hash = ? WHERE agent_id = ?',
+            [$keyId, $keyHash, $id->value],
+        );
+    }
+
+    public function promotePendingKey(AgentId $id, string $keyId): void
+    {
+        $this->db->run(
+            'UPDATE printdock_agents SET key_id = pending_key_id, key_hash = pending_key_hash, pending_key_id = NULL,'
+            . ' pending_key_hash = NULL WHERE agent_id = ? AND pending_key_id = ? AND pending_key_hash IS NOT NULL',
+            [$id->value, $keyId],
+        );
     }
 
     public function all(): array
@@ -183,6 +201,8 @@ final class PdoAgentRepository implements AgentRepository
             'empty_claim_at' => PdoSupport::parseTime($r['empty_claim_at']),
             'empty_claim_printers' => null === $r['empty_claim_printers']
                 ? [] : array_values(array_map(PdoSupport::string(...), PdoSupport::decodeJson($r['empty_claim_printers']))),
+            'pending_key_id' => null === $r['pending_key_id'] ? null : PdoSupport::string($r['pending_key_id']),
+            'pending_key_hash' => null === $r['pending_key_hash'] ? null : PdoSupport::string($r['pending_key_hash']),
         ]);
     }
 }

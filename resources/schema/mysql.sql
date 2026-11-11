@@ -26,7 +26,10 @@ CREATE TABLE IF NOT EXISTS printdock_agents (
     last_hello LONGTEXT NULL,
     empty_claim_at DATETIME(6) NULL,
     empty_claim_printers TEXT NULL,
-    UNIQUE KEY printdock_agents_key_id (key_id)
+    pending_key_id CHAR(8) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    pending_key_hash CHAR(64) CHARACTER SET ascii NULL,
+    UNIQUE KEY printdock_agents_key_id (key_id),
+    UNIQUE KEY printdock_agents_pending_key_id (pending_key_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS printdock_jobs (

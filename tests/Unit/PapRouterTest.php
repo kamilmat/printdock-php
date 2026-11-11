@@ -313,6 +313,14 @@ final class PapRouterTest extends TestCase
                 throw new \RuntimeException('secret connection string');
             }
 
+            public function setPendingKey(AgentId $id, string $keyId, string $keyHash): void
+            {
+            }
+
+            public function promotePendingKey(AgentId $id, string $keyId): void
+            {
+            }
+
             public function all(): array
             {
                 return [];

@@ -66,6 +66,29 @@ final class PapAdmin
     }
 
     /**
+     * Issues a new key for an existing station and returns it (the only time the plaintext exists). The current key
+     * keeps working until the new one is used for the first time: then the new key becomes the current one and the
+     * old one stops working at once. Issuing again replaces a pending key that was never used. For a station that
+     * gets a new installation (an installer with a fresh key) while the old one must keep printing.
+     */
+    public function issueKey(AgentId $id): string
+    {
+        if (null === $this->agents->find($id)) {
+            throw new AdminException(AdminException::NOT_FOUND, 'unknown agent');
+        }
+        for ($attempt = 0; $attempt < 5; ++$attempt) {
+            $key = AgentKey::generate();
+            if (null === $this->agents->findByKeyId($key->keyId())) {
+                $this->agents->setPendingKey($id, $key->keyId(), $key->hash());
+
+                return $key->toString();
+            }
+        }
+
+        throw new \RuntimeException('could not find an unused key id');
+    }
+
+    /**
      * Applies `$change` to the agent and saves it. Revoking, renaming, reconfiguring and replacing printers all
      * go through here; only administrative fields are written, so a concurrent hello is not lost.
      *

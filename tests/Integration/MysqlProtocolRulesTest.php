@@ -84,6 +84,13 @@ final class MysqlProtocolRulesTest extends ProtocolRulesTestCase
         ));
     }
 
+    protected function agentIndexes(\PDO $pdo): array
+    {
+        return array_map(static fn (array $r): string => PdoSupport::string($r['name']), (new PdoSupport($pdo))->fetchRows(
+            "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'printdock_agents'",
+        ));
+    }
+
     protected function createStack(): Stack
     {
         $pdo = $this->emptyDatabase();

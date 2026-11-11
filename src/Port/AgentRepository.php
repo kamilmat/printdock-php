@@ -22,8 +22,25 @@ interface AgentRepository
 
     public function find(AgentId $id): ?Agent;
 
-    /** The 8-character id from `pa1_<key_id>_<secret>`. Must be an indexed, exact-match lookup. */
+    /**
+     * The agent whose current or pending key has this id: the 8 characters from `pa1_<key_id>_<secret>`. Must be
+     * an indexed, exact-match lookup on both (unique indexes on `key_id` and `pending_key_id`).
+     */
     public function findByKeyId(string $keyId): ?Agent;
+
+    /**
+     * Stores a newly issued key as the agent's pending key (id and SHA-256 hash, never the secret), replacing any
+     * earlier pending key. Touches nothing else; the current key keeps working. Does nothing for an unknown id.
+     */
+    public function setPendingKey(AgentId $id, string $keyId, string $keyHash): void;
+
+    /**
+     * Makes the pending key with this id the current key and clears the pending one, in one conditional write
+     * (`... WHERE agent_id = ? AND pending_key_id = ?`): two requests promoting at once both succeed, and a key
+     * replaced by a newer pending key in the meantime is not promoted. Does nothing when the pending key id no
+     * longer matches; the caller reads the agent again to see the outcome.
+     */
+    public function promotePendingKey(AgentId $id, string $keyId): void;
 
     /** @return list<Agent> administrative listing, oldest first */
     public function all(): array;

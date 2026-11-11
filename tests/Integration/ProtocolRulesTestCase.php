@@ -1064,6 +1064,126 @@ abstract class ProtocolRulesTestCase extends TestCase
         self::assertSame(64, strlen($data['key_hash']));
     }
 
+    // -- 2. key replacement (PapAdmin::issueKey) -----------------------------------
+
+    private function withKey(RegisteredAgent $agent, string $key): RegisteredAgent
+    {
+        return new RegisteredAgent($agent->agent, $key);
+    }
+
+    public function test_a_new_key_works_alongside_the_old_one_until_its_first_use(): void
+    {
+        $old = $this->agent();
+        self::assertSame(200, $this->stack->hello($old)->status);
+
+        $new = $this->withKey($old, $this->stack->admin->issueKey($old->agent->id()));
+
+        self::assertTrue($this->stack->admin->findAgent($old->agent->id())?->hasPendingKey());
+        self::assertSame(200, $this->stack->hello($old)->status, 'the old key keeps working while the new one waits');
+        self::assertSame(204, $this->stack->claim($old)->status);
+        self::assertSame(200, $this->stack->hello($new)->status, 'the first use of the new key is accepted');
+        $stored = $this->stack->admin->findAgent($old->agent->id());
+        self::assertFalse($stored?->hasPendingKey());
+        self::assertSame(substr($new->key, 4, 8), $stored->keyId());
+        $refused = $this->stack->hello($old);
+        self::assertSame(401, $refused->status, 'the old key stops working once the new one was used');
+        self::assertSame('unauthorized', $this->body($refused)['error']);
+        self::assertSame(200, $this->stack->hello($new)->status);
+    }
+
+    public function test_a_new_key_works_for_a_station_that_never_connected(): void
+    {
+        $old = $this->agent();
+        $new = $this->withKey($old, $this->stack->admin->issueKey($old->agent->id()));
+
+        self::assertSame(204, $this->stack->claim($new)->status);
+        self::assertSame(401, $this->stack->hello($old)->status);
+    }
+
+    public function test_issuing_again_replaces_the_pending_key(): void
+    {
+        $old = $this->agent();
+        $first = $this->withKey($old, $this->stack->admin->issueKey($old->agent->id()));
+        $second = $this->withKey($old, $this->stack->admin->issueKey($old->agent->id()));
+
+        self::assertSame(401, $this->stack->hello($first)->status, 'only the newest pending key works');
+        self::assertSame(200, $this->stack->hello($old)->status);
+        self::assertSame(200, $this->stack->hello($second)->status);
+        self::assertSame(401, $this->stack->hello($old)->status);
+    }
+
+    public function test_a_wrong_secret_for_the_pending_key_id_is_unauthorized_and_promotes_nothing(): void
+    {
+        $old = $this->agent();
+        $new = $this->stack->admin->issueKey($old->agent->id());
+        $forged = substr($new, 0, 13) . str_repeat('A', 43);
+
+        $response = $this->stack->call('POST', '/hello', $forged, []);
+
+        self::assertSame(401, $response->status);
+        self::assertSame('unauthorized', $this->body($response)['error']);
+        self::assertTrue($this->stack->admin->findAgent($old->agent->id())?->hasPendingKey());
+        self::assertSame(200, $this->stack->hello($old)->status);
+    }
+
+    public function test_a_revoked_station_does_not_promote_its_pending_key(): void
+    {
+        $old = $this->agent();
+        $new = $this->withKey($old, $this->stack->admin->issueKey($old->agent->id()));
+        $this->stack->admin->updateAgent($old->agent->id(), static fn ($a) => $a->revoke());
+
+        $revoked = $this->stack->hello($new);
+
+        self::assertSame(401, $revoked->status);
+        self::assertSame('revoked', $this->body($revoked)['error']);
+        self::assertTrue($this->stack->admin->findAgent($old->agent->id())?->hasPendingKey(), 'a revoked station keeps its pending key unused');
+        $this->stack->admin->updateAgent($old->agent->id(), static fn ($a) => $a->restore());
+        self::assertSame(200, $this->stack->hello($old)->status);
+        self::assertSame(200, $this->stack->hello($new)->status);
+        self::assertSame(401, $this->stack->hello($old)->status);
+    }
+
+    public function test_two_first_requests_with_the_new_key_at_once_both_succeed(): void
+    {
+        $agents = new StaleReadAgentRepository($this->stack->agents);
+        $stack = new Stack($this->stack->clock, $agents, $this->stack->jobs, $this->stack->discovery);
+        $old = $stack->register($this->agentSettings());
+        $new = $this->withKey($old, $stack->admin->issueKey($old->agent->id()));
+        // both requests looked the key up before either promoted it
+        $agents->staleByKey = $agents->findByKeyId(substr($new->key, 4, 8));
+
+        self::assertSame(200, $stack->hello($new)->status);
+        self::assertSame(204, $stack->claim($new)->status);
+        $agents->staleByKey = null;
+        self::assertSame(401, $stack->hello($old)->status);
+        self::assertSame(200, $stack->hello($new)->status);
+    }
+
+    public function test_a_pending_key_replaced_while_a_request_was_using_it_is_unauthorized(): void
+    {
+        $agents = new StaleReadAgentRepository($this->stack->agents);
+        $stack = new Stack($this->stack->clock, $agents, $this->stack->jobs, $this->stack->discovery);
+        $old = $stack->register($this->agentSettings());
+        $first = $this->withKey($old, $stack->admin->issueKey($old->agent->id()));
+        $snapshot = $agents->findByKeyId(substr($first->key, 4, 8));
+        $stack->admin->issueKey($old->agent->id());
+        $agents->staleByKey = $snapshot;
+
+        self::assertSame(401, $stack->hello($first)->status);
+        $agents->staleByKey = null;
+        self::assertSame(200, $stack->hello($old)->status, 'nothing was promoted');
+    }
+
+    public function test_issuing_a_key_for_an_unknown_station_is_not_found(): void
+    {
+        try {
+            $this->stack->admin->issueKey(AgentId::generate());
+            self::fail('expected AdminException');
+        } catch (AdminException $e) {
+            self::assertSame(AdminException::NOT_FOUND, $e->kind);
+        }
+    }
+
     // -- 8. release ---------------------------------------------------------------
 
     public function test_release_without_an_update_channel_is_204(): void

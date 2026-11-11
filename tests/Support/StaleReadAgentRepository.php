@@ -10,12 +10,14 @@ use PrintDock\Server\Domain\AgentId;
 use PrintDock\Server\Port\AgentRepository;
 
 /**
- * Delegates to another repository, but `find()` can be made to return an earlier snapshot: what a request that
- * read the agent just before a concurrent write would see.
+ * Delegates to another repository, but `find()` (and, separately, `findByKeyId()`) can be made to return an earlier
+ * snapshot: what a request that read the agent just before a concurrent write would see.
  */
 final class StaleReadAgentRepository implements AgentRepository
 {
     public ?Agent $stale = null;
+
+    public ?Agent $staleByKey = null;
 
     public function __construct(private readonly AgentRepository $inner)
     {
@@ -33,7 +35,17 @@ final class StaleReadAgentRepository implements AgentRepository
 
     public function findByKeyId(string $keyId): ?Agent
     {
-        return $this->inner->findByKeyId($keyId);
+        return null !== $this->staleByKey ? clone $this->staleByKey : $this->inner->findByKeyId($keyId);
+    }
+
+    public function setPendingKey(AgentId $id, string $keyId, string $keyHash): void
+    {
+        $this->inner->setPendingKey($id, $keyId, $keyHash);
+    }
+
+    public function promotePendingKey(AgentId $id, string $keyId): void
+    {
+        $this->inner->promotePendingKey($id, $keyId);
     }
 
     public function all(): array

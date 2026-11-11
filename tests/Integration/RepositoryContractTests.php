@@ -235,6 +235,53 @@ trait RepositoryContractTests
         self::assertSame(1, $stored->claimCount());
     }
 
+    public function test_a_pending_key_is_found_by_its_id_and_promoted_only_by_a_matching_conditional_write(): void
+    {
+        $registered = $this->stack->register();
+        $id = $registered->agent->id();
+        $oldKeyId = $registered->agent->keyId();
+        $agents = $this->stack->agents;
+
+        $agents->setPendingKey($id, 'pend0001', str_repeat('a', 64));
+        $agents->setPendingKey($id, 'pend0002', str_repeat('b', 64));
+
+        self::assertNull($agents->findByKeyId('pend0001'), 'a replaced pending key is gone');
+        $byPending = $agents->findByKeyId('pend0002');
+        self::assertTrue($byPending?->hasPendingKey());
+        self::assertSame($oldKeyId, $byPending->keyId());
+        self::assertSame('pend0002', $byPending->toData()['pending_key_id'] ?? null);
+        self::assertSame($oldKeyId, $agents->findByKeyId($oldKeyId)?->keyId());
+
+        $agents->promotePendingKey($id, 'pend0001');
+        self::assertSame($oldKeyId, $agents->find($id)?->keyId(), 'a stale pending id promotes nothing');
+
+        $agents->promotePendingKey($id, 'pend0002');
+        $agents->promotePendingKey($id, 'pend0002');
+        $promoted = $agents->find($id);
+        self::assertSame('pend0002', $promoted?->keyId());
+        self::assertSame(str_repeat('b', 64), $promoted->toData()['key_hash']);
+        self::assertFalse($promoted->hasPendingKey());
+        self::assertNull($agents->findByKeyId($oldKeyId));
+        self::assertSame($id->value, $agents->findByKeyId('pend0002')?->id()->value);
+    }
+
+    public function test_an_administrative_save_does_not_touch_the_keys(): void
+    {
+        $registered = $this->stack->register();
+        $id = $registered->agent->id();
+        $stale = $this->stack->agents->find($id);
+        self::assertNotNull($stale);
+        $this->stack->agents->setPendingKey($id, 'pend0003', str_repeat('c', 64));
+        $stale->rename('Renamed');
+
+        $this->stack->agents->save($stale);
+
+        self::assertTrue($this->stack->agents->find($id)?->hasPendingKey());
+        $this->stack->agents->promotePendingKey($id, 'pend0003');
+        $this->stack->agents->save($registered->agent);
+        self::assertSame('pend0003', $this->stack->agents->find($id)?->keyId(), 'saving an agent read before the promotion keeps the new key');
+    }
+
     public function test_all_lists_every_agent(): void
     {
         $this->stack->register();

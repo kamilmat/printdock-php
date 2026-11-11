@@ -138,6 +138,14 @@ final class SqliteProtocolRulesTest extends ProtocolRulesTestCase
         );
     }
 
+    protected function agentIndexes(\PDO $pdo): array
+    {
+        return array_map(
+            static fn (array $r): string => PdoSupport::string($r['name']),
+            (new PdoSupport($pdo))->fetchRows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'printdock_agents'"),
+        );
+    }
+
     protected function createStack(): Stack
     {
         $pdo = $this->emptyDatabase();

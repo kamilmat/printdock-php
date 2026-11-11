@@ -40,7 +40,7 @@ an event (`JobEvent`) in `Job`, which the repository appends to the history in t
 
    | Port | What it must guarantee |
    |---|---|
-   | `AgentRepository` | `findByKeyId()` via a unique index (one query per request). `save()` writes only administrative fields (name, settings, printers, key revocation); `recordHello()`, `recordActivity()` and `recordClaimResult()` are separate, narrow writes so that concurrent agent requests do not overwrite the administrator's work. `delete()` removes only the agent row. |
+   | `AgentRepository` | `findByKeyId()` via unique indexes on the current and the pending key id (one query per request); `setPendingKey()` and the conditional `promotePendingKey()` are the only writes of key columns. `save()` writes only administrative fields (name, settings, printers, key revocation); `recordHello()`, `recordActivity()` and `recordClaimResult()` are separate, narrow writes so that concurrent agent requests do not overwrite the administrator's work. `delete()` removes only the agent row. |
    | `JobRepository` | **`claimNext()` is atomic**: in one transaction with row locks (`SELECT … FOR UPDATE`, and for new-lease candidates `FOR UPDATE SKIP LOCKED`, MySQL 8 / PostgreSQL), so that two concurrent claims cannot lease the same job. Ordering "oldest first" = insertion order (auto-increment, not `created_at`). `modify($id, $callable)` loads the job with a write lock, calls the callable and saves; if the callable throws, nothing is saved (this is how ack with 409 works). `sweep()` returns expired leases to `queued` and turns silent `spooled` jobs into `uncertain` — through `Job::applyTimeouts()`, not a bulk `UPDATE`, because every change is an event. SQL does the selection, **`Job` does the rules** (`isClaimableFor`, `isRedeliverableTo`, `lease`, `redeliver`, `isClosedBy`). **History:** `add()`, `sweep()`, `claimNext()` and `modify()` append `Job::pullEvents()` to the event log in the same transaction; `history()` and `findSummary()` read **without the content column**, and `modify()` and `sweep()` do not need it either — the SQL adapter loads the job without it and gives `Job::fromData()` a lazy-loading function (`content()` reads on first use), so that ack does not pull a multi-megabyte PDF; `find()` and `claimNext()` return the content; `events()` is the job's timeline. `hasOpenJobs()`, `purgeContent()` and `purgeHistory()` serve station removal and retention. |
    | `DiscoveryStore` | an open scan request and the latest result per agent; `storeResult()` closes the request atomically and returns `matched` only once; `delete()` forgets the agent's data. |
    | `ReleaseProvider` | optional; without it `GET /release` always answers 204. |
@@ -243,6 +243,38 @@ foreign server: `python3 tests/conformance/server_conformance.py --url … --key
   but `INSERT IGNORE` and `DATETIME(6)` are not).
 - `GET /release` only through the port; there is no built-in update channel or `POST /enroll` (reserved in PAP/1).
 - Jobs from before 0.6 have no events (the timeline starts at the first change after the upgrade) and no `printer_name`.
+
+## Changes in 0.8.0
+
+- **New key alongside the old one**: `PapAdmin::issueKey(AgentId $id): string` issues a new key for an existing
+  station (also one that never connected) and returns the plaintext once; only its id and SHA-256 hash are stored, as
+  the station's **pending** key. The current key keeps working. The first request with the new key promotes it: it
+  becomes the current key, the pending one is cleared and the old key is `401 unauthorized` from then on. Issuing again
+  replaces a pending key that was never used (only the newest works). A wrong secret for the pending key id is
+  `401 unauthorized` and promotes nothing; a revoked station gets `401 revoked` and its pending key is not promoted
+  (it still works once the station is restored). Unknown station: `AdminException::NOT_FOUND`. Use case: an installer
+  with a fresh key for a station whose running computer must keep printing until the new installation connects.
+- **`Agent`**: `hasPendingKey(): bool` (show "new key waiting for its first connection"), `authenticatesWithPendingKey()`;
+  `authenticatesWith()` now also checks the key id. `AgentData` has the optional keys `pending_key_id`,
+  `pending_key_hash` (older data without them still loads).
+- **`AgentRepository` port (breaking for custom implementations)**: `findByKeyId()` must find an agent by its current
+  **or** pending key id; new `setPendingKey(AgentId $id, string $keyId, string $keyHash): void` (writes only the two
+  pending columns) and `promotePendingKey(AgentId $id, string $keyId): void` — one conditional write,
+  `UPDATE printdock_agents SET key_id = pending_key_id, key_hash = pending_key_hash, pending_key_id = NULL,
+  pending_key_hash = NULL WHERE agent_id = ? AND pending_key_id = ? AND pending_key_hash IS NOT NULL`, so two first requests at once both succeed and a
+  key replaced in the meantime is not promoted (the server reads the agent again afterwards). `save()` still writes no
+  key columns.
+- **Database**: new nullable columns `printdock_agents.pending_key_id` and `pending_key_hash` with a unique index
+  `printdock_agents_pending_key_id`; `PdoSchema::install()` adds them to an existing database (SQLite: the index is a
+  `CREATE UNIQUE INDEX IF NOT EXISTS` in the schema file, now run after the columns are added). Hosts with their own
+  migrations (MySQL):
+
+  ```sql
+  ALTER TABLE printdock_agents
+      ADD COLUMN pending_key_id CHAR(8) CHARACTER SET ascii COLLATE ascii_bin NULL,
+      ADD COLUMN pending_key_hash CHAR(64) CHARACTER SET ascii NULL,
+      ADD UNIQUE INDEX printdock_agents_pending_key_id (pending_key_id);
+  ```
 
 ## Changes in 0.7.1
 

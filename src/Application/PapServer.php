@@ -86,6 +86,9 @@ final class PapServer
     }
 
     /**
+     * A key matching the station's pending key ({@see PapAdmin::issueKey()}) is promoted to the current key on
+     * its first use; from then on the old key is unauthorized. A revoked station's pending key is not promoted.
+     *
      * @param string|null $authorization the raw `Authorization` header value
      *
      * @throws ProtocolError 401 `unauthorized` or `revoked`
@@ -97,11 +100,26 @@ final class PapServer
         }
         $key = AgentKey::parse($m[1]);
         $agent = null === $key ? null : $this->agents->findByKeyId($key->keyId());
-        if (null === $key || null === $agent || !$agent->authenticatesWith($key)) {
+        if (null === $key || null === $agent) {
+            throw ProtocolError::unauthorized();
+        }
+        $pending = !$agent->authenticatesWith($key);
+        if ($pending && !$agent->authenticatesWithPendingKey($key)) {
             throw ProtocolError::unauthorized();
         }
         if ($agent->isRevoked()) {
             throw ProtocolError::revoked();
+        }
+        if ($pending) {
+            // First use of a newly issued key: it becomes the current one. Read again to see who won a race.
+            $this->agents->promotePendingKey($agent->id(), $key->keyId());
+            $agent = $this->agents->find($agent->id());
+            if (null === $agent || !$agent->authenticatesWith($key)) {
+                throw ProtocolError::unauthorized();
+            }
+            if ($agent->isRevoked()) {
+                throw ProtocolError::revoked();
+            }
         }
 
         return $agent;

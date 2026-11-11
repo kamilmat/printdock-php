@@ -44,12 +44,33 @@ final class InMemoryAgentRepository implements AgentRepository
     public function findByKeyId(string $keyId): ?Agent
     {
         foreach ($this->agents as $agent) {
-            if ($agent->keyId() === $keyId) {
+            $data = $agent->toData();
+            if ($data['key_id'] === $keyId || ($data['pending_key_id'] ?? null) === $keyId) {
                 return clone $agent;
             }
         }
 
         return null;
+    }
+
+    public function setPendingKey(AgentId $id, string $keyId, string $keyHash): void
+    {
+        $stored = $this->agents[$id->value] ?? null;
+        if (null !== $stored) {
+            $this->agents[$id->value] = Agent::fromData(['pending_key_id' => $keyId, 'pending_key_hash' => $keyHash] + $stored->toData());
+        }
+    }
+
+    public function promotePendingKey(AgentId $id, string $keyId): void
+    {
+        $stored = $this->agents[$id->value] ?? null;
+        $data = $stored?->toData();
+        if (null === $data || $keyId !== ($data['pending_key_id'] ?? null) || null === ($data['pending_key_hash'] ?? null)) {
+            return;
+        }
+        $this->agents[$id->value] = Agent::fromData([
+            'key_id' => $keyId, 'key_hash' => $data['pending_key_hash'], 'pending_key_id' => null, 'pending_key_hash' => null,
+        ] + $data);
     }
 
     public function all(): array

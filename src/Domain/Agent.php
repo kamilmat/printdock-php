@@ -15,12 +15,17 @@ namespace PrintDock\Server\Domain;
  * those printers, ignores `Retry-After` and gets 429 ({@see claimRateLimitLeft()}). Offering a printer that has
  * just become free is not limited. New work for the station, a scan request and a `hello` clear it.
  *
+ * A station may also have a pending key (`pending_key_id`, `pending_key_hash`): issued by the operator for a new
+ * installation while the current key keeps working. The first request with the pending key promotes it to the
+ * current key and the old one stops working ({@see \PrintDock\Server\Port\AgentRepository::promotePendingKey()}).
+ *
  * @phpstan-type AgentData array{
  *     id: string, name: string, key_id: string, key_hash: string, revoked: bool,
  *     settings: AgentSettings, printers: list<Printer>, reported_printers: list<Printer>, config_version: string,
  *     created_at: \DateTimeImmutable, last_hello_at: ?\DateTimeImmutable, last_claim_at: ?\DateTimeImmutable,
  *     last_seen_at: ?\DateTimeImmutable, hello_count: int, claim_count: int, last_hello: ?HelloReport,
- *     empty_claim_at?: ?\DateTimeImmutable, empty_claim_printers?: list<string>
+ *     empty_claim_at?: ?\DateTimeImmutable, empty_claim_printers?: list<string>,
+ *     pending_key_id?: ?string, pending_key_hash?: ?string
  * }
  */
 final class Agent
@@ -105,6 +110,12 @@ final class Agent
         );
         $agent->emptyClaimAt = $d['empty_claim_at'] ?? null;
         $agent->emptyClaimPrinters = null === $agent->emptyClaimAt ? [] : ($d['empty_claim_printers'] ?? []);
+        $pendingId = $d['pending_key_id'] ?? null;
+        $pendingHash = $d['pending_key_hash'] ?? null;
+        if (null !== $pendingId && null !== $pendingHash) {
+            $agent->pendingKeyId = $pendingId;
+            $agent->pendingKeyHash = $pendingHash;
+        }
 
         return $agent;
     }
@@ -122,6 +133,7 @@ final class Agent
             'last_claim_at' => $this->lastClaimAt, 'last_seen_at' => $this->lastSeenAt,
             'hello_count' => $this->helloCount, 'claim_count' => $this->claimCount, 'last_hello' => $this->lastHello,
             'empty_claim_at' => $this->emptyClaimAt, 'empty_claim_printers' => $this->emptyClaimPrinters,
+            'pending_key_id' => $this->pendingKeyId, 'pending_key_hash' => $this->pendingKeyHash,
         ];
     }
 
@@ -130,10 +142,26 @@ final class Agent
     /** @var list<string> */
     private array $emptyClaimPrinters = [];
 
-    /** Constant-time check of the key's secret against the stored hash. */
+    private ?string $pendingKeyId = null;
+
+    private ?string $pendingKeyHash = null;
+
+    /** Constant-time check of the key's secret against the stored hash of the current key. */
     public function authenticatesWith(AgentKey $key): bool
     {
-        return $key->matches($this->keyHash);
+        return $key->keyId() === $this->keyId && $key->matches($this->keyHash);
+    }
+
+    /** Constant-time check of the key against the pending key; false when there is none. */
+    public function authenticatesWithPendingKey(AgentKey $key): bool
+    {
+        return null !== $this->pendingKeyHash && $key->keyId() === $this->pendingKeyId && $key->matches($this->pendingKeyHash);
+    }
+
+    /** True while a newly issued key waits for its first use (the current key still works). */
+    public function hasPendingKey(): bool
+    {
+        return null !== $this->pendingKeyId;
     }
 
     public function id(): AgentId

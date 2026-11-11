@@ -10,11 +10,14 @@ use PrintDock\Server\Adapter\Pdo\PdoDiscoveryStore;
 use PrintDock\Server\Adapter\Pdo\PdoJobRepository;
 use PrintDock\Server\Adapter\Pdo\PdoSchema;
 use PrintDock\Server\Adapter\Pdo\PdoSupport;
+use PrintDock\Server\Domain\AgentId;
 use PrintDock\Server\Domain\HistoryQuery;
 use PrintDock\Server\Domain\JobEvent;
 use PrintDock\Server\Domain\JobId;
 use PrintDock\Server\Domain\JobState;
 use PrintDock\Server\Domain\JobSummary;
+use PrintDock\Server\Domain\Printer;
+use PrintDock\Server\Domain\PrinterTransport;
 use PrintDock\Server\Tests\Support\InterceptingPdo;
 use PrintDock\Server\Tests\Support\Stack;
 
@@ -29,6 +32,9 @@ trait SchemaUpgradeTests
 
     /** @return list<string> */
     abstract protected function jobIndexes(\PDO $pdo): array;
+
+    /** @return list<string> */
+    abstract protected function agentIndexes(\PDO $pdo): array;
 
     /**
      * Two connections to one database without any printdock table; the first records and intercepts its SQL.
@@ -50,6 +56,20 @@ trait SchemaUpgradeTests
         }
     }
 
+    /** Writes a 0.5-shaped agent row by hand (the adapter reads columns that version did not have); returns its id. */
+    private function insertPreviousAgent(\PDO $pdo): string
+    {
+        $id = AgentId::generate()->value;
+        (new PdoSupport($pdo))->run(
+            'INSERT INTO printdock_agents (agent_id, name, key_id, key_hash, revoked, poll_interval_s, hello_interval_s,'
+            . ' lease_s, spool_timeout_s, printers_managed_by, printers, reported_printers, config_version, created_at)'
+            . " VALUES (?, 'Packing 1', ?, ?, 0, 2, 60, 30, 600, 'server', ?, '[]', '2026-10-30T12:00:00Z', '2026-10-30 12:00:00.000000')",
+            [$id, substr($id, -8), str_repeat('0', 64), json_encode([(new Printer('p1', 'label', PrinterTransport::Socket, 'zpl', 203, '100x150mm', '10.0.0.15:9100'))->toArray()], JSON_THROW_ON_ERROR)],
+        );
+
+        return $id;
+    }
+
     /** Writes a 0.5-shaped job row by hand (the adapter writes columns that version did not have). */
     private function insertPreviousJob(\PDO $pdo, string $agentId, string $id, string $state, ?string $finished, ?string $reference, string $content): void
     {
@@ -68,9 +88,9 @@ trait SchemaUpgradeTests
     {
         [$pdo] = $this->interceptedPair();
         $this->createPreviousSchema($pdo);
-        $agent = (new Stack(new MutableClock(), new PdoAgentRepository($pdo), new PdoJobRepository($pdo), new PdoDiscoveryStore($pdo)))->register();
+        $agentId = $this->insertPreviousAgent($pdo);
         $id = JobId::generate()->value;
-        $this->insertPreviousJob($pdo, $agent->agent->id()->value, $id, 'queued', null, '{"source_ref":"order-7"}', 'label bytes');
+        $this->insertPreviousJob($pdo, $agentId, $id, 'queued', null, '{"source_ref":"order-7"}', 'label bytes');
         $pdo->before = static function (string $sql): void {
             if (str_starts_with($sql, 'UPDATE printdock_jobs')) {
                 throw new \RuntimeException('connection lost');
@@ -115,19 +135,45 @@ trait SchemaUpgradeTests
         self::assertNotNull($stack->admin->findAgent($agent->agent->id())?->emptyClaimAt());
     }
 
+    public function test_install_adds_the_pending_key_columns_to_a_0_7_agents_table_and_keeps_the_key_working(): void
+    {
+        $pdo = $this->emptyDatabase();
+        PdoSchema::install($pdo);
+        $stack = new Stack(new MutableClock(), new PdoAgentRepository($pdo), new PdoJobRepository($pdo), new PdoDiscoveryStore($pdo));
+        $agent = $stack->register();
+        $db = new PdoSupport($pdo);
+        if ($db->isSqlite()) {
+            $pdo->exec('DROP INDEX printdock_agents_pending_key_id');
+            $pdo->exec('ALTER TABLE printdock_agents DROP COLUMN pending_key_id');
+            $pdo->exec('ALTER TABLE printdock_agents DROP COLUMN pending_key_hash');
+        } else {
+            $pdo->exec('ALTER TABLE printdock_agents DROP INDEX printdock_agents_pending_key_id, DROP COLUMN pending_key_id, DROP COLUMN pending_key_hash');
+        }
+        $row = $db->fetchRow('SELECT * FROM printdock_agents');
+        self::assertNotNull($row);
+        self::assertArrayNotHasKey('pending_key_id', $row, 'the table must have the 0.7 shape before the upgrade');
+
+        PdoSchema::install($pdo);
+        PdoSchema::install($pdo);
+
+        self::assertContains('printdock_agents_pending_key_id', $this->agentIndexes($pdo));
+        $newKey = $stack->admin->issueKey($agent->agent->id());
+        self::assertSame(200, $stack->hello($agent)->status, 'the old key works while the new one waits');
+        self::assertSame(204, $stack->call('POST', '/jobs/claim', $newKey, ['printer_ids' => ['p1'], 'max' => 1])->status);
+        self::assertSame(401, $stack->hello($agent)->status);
+    }
+
     public function test_install_upgrades_a_database_of_the_previous_version_and_keeps_its_data(): void
     {
         $pdo = $this->emptyDatabase();
         $this->createPreviousSchema($pdo);
-        // the agents table did not change but for a new column: register through the adapter
+        $agentId = $this->insertPreviousAgent($pdo);
         $agents = new PdoAgentRepository($pdo);
-        $stack = new Stack(new MutableClock(), $agents, new PdoJobRepository($pdo), new PdoDiscoveryStore($pdo));
-        $agent = $stack->register();
         $content = "\x00\xffbinary\u{0105}";
         $queued = JobId::generate()->value;
         $printed = JobId::generate()->value;
-        $this->insertPreviousJob($pdo, $agent->agent->id()->value, $queued, 'queued', null, '{"source_ref":"order-1"}', $content);
-        $this->insertPreviousJob($pdo, $agent->agent->id()->value, $printed, 'printed', '2026-10-30 13:00:00.000000', null, $content);
+        $this->insertPreviousJob($pdo, $agentId, $queued, 'queued', null, '{"source_ref":"order-1"}', $content);
+        $this->insertPreviousJob($pdo, $agentId, $printed, 'printed', '2026-10-30 13:00:00.000000', null, $content);
 
         PdoSchema::install($pdo);
         PdoSchema::install($pdo);

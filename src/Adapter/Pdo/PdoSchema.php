@@ -10,6 +10,8 @@ namespace PrintDock\Server\Adapter\Pdo;
  *
  * `CREATE TABLE IF NOT EXISTS` cannot add columns to a table that exists, so {@see COLUMNS} and
  * {@see INDEXES} list what later versions added; missing ones are added with `ALTER TABLE` / `CREATE INDEX`.
+ * The `CREATE INDEX` statements of the schema file run after the columns are added, so an index on a new column
+ * can be declared there (SQLite).
  * Then the {@see BACKFILL} statements fill in rows that predate a column (content size, station name,
  * `reference.source_ref`). They touch only rows still unfilled and run on every install, so a run that failed
  * midway is completed by the next one. Printer names of old jobs stay null: the old printer configuration is not
@@ -35,14 +37,24 @@ final class PdoSchema
         'printdock_agents' => [
             'empty_claim_at' => ['TEXT', 'DATETIME(6) NULL'],
             'empty_claim_printers' => ['TEXT', 'TEXT NULL'],
+            'pending_key_id' => ['TEXT', 'CHAR(8) CHARACTER SET ascii COLLATE ascii_bin NULL'],
+            'pending_key_hash' => ['TEXT', 'CHAR(64) CHARACTER SET ascii NULL'],
         ],
     ];
 
-    /** Indexes of `printdock_jobs` added after the first version (SQLite gets them from the schema file). */
+    /**
+     * MySQL indexes added after the first version: table => name => `[UNIQUE ](columns)`. SQLite gets them from
+     * the `CREATE INDEX IF NOT EXISTS` statements of its schema file.
+     */
     private const INDEXES = [
-        'printdock_jobs_agent_created' => '(agent_id, created_at)',
-        'printdock_jobs_state' => '(state, seq)',
-        'printdock_jobs_finished' => '(finished_at)',
+        'printdock_jobs' => [
+            'printdock_jobs_agent_created' => '(agent_id, created_at)',
+            'printdock_jobs_state' => '(state, seq)',
+            'printdock_jobs_finished' => '(finished_at)',
+        ],
+        'printdock_agents' => [
+            'printdock_agents_pending_key_id' => 'UNIQUE (pending_key_id)',
+        ],
     ];
 
     /**
@@ -84,16 +96,19 @@ final class PdoSchema
             explode(";\n", (string) preg_replace('/^--.*$/m', '', $sql)),
             static fn (string $s): bool => '' !== trim($s),
         );
+        $isIndex = static fn (string $s): bool => 1 === preg_match('/^\s*CREATE\s+(UNIQUE\s+)?INDEX\b/i', $s);
+        $tables = array_filter($statements, static fn (string $s): bool => !$isIndex($s));
+        $indexes = array_filter($statements, $isIndex);
         if ($db->isSqlite()) {
-            $db->transactional(static function () use ($db, $statements): void {
-                self::create($db, $statements);
-                self::upgrade($db);
+            $db->transactional(static function () use ($db, $tables, $indexes): void {
+                self::create($db, $tables);
+                self::upgrade($db, $indexes);
             });
 
             return;
         }
-        self::create($db, $statements);
-        self::upgrade($db);
+        self::create($db, $tables);
+        self::upgrade($db, $indexes);
     }
 
     /**
@@ -106,7 +121,10 @@ final class PdoSchema
         }
     }
 
-    private static function upgrade(PdoSupport $db): void
+    /**
+     * @param array<string> $indexStatements the `CREATE INDEX` statements of the schema file
+     */
+    private static function upgrade(PdoSupport $db, array $indexStatements): void
     {
         $dialect = $db->isSqlite() ? 0 : 1;
         foreach (self::COLUMNS as $table => $columns) {
@@ -117,14 +135,24 @@ final class PdoSchema
                 }
             }
         }
+        self::create($db, $indexStatements);
         if (!$db->isSqlite()) {
-            $indexes = array_map(static fn (array $r): string => PdoSupport::string($r['name']), $db->fetchRows(
-                'SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
-                ['printdock_jobs'],
-            ));
-            foreach (self::INDEXES as $index => $columns) {
-                if (!in_array($index, $indexes, true)) {
-                    self::ddl($db, sprintf('CREATE INDEX %s ON printdock_jobs %s', $index, $columns));
+            foreach (self::INDEXES as $table => $definitions) {
+                $present = array_map(static fn (array $r): string => PdoSupport::string($r['name']), $db->fetchRows(
+                    'SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
+                    [$table],
+                ));
+                foreach ($definitions as $index => $definition) {
+                    if (!in_array($index, $present, true)) {
+                        $unique = str_starts_with($definition, 'UNIQUE ');
+                        self::ddl($db, sprintf(
+                            'CREATE %sINDEX %s ON %s %s',
+                            $unique ? 'UNIQUE ' : '',
+                            $index,
+                            $table,
+                            $unique ? substr($definition, 7) : $definition,
+                        ));
+                    }
                 }
             }
         }

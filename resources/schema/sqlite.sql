@@ -24,8 +24,12 @@ CREATE TABLE IF NOT EXISTS printdock_agents (
     claim_count INTEGER NOT NULL DEFAULT 0,
     last_hello TEXT,
     empty_claim_at TEXT,
-    empty_claim_printers TEXT
+    empty_claim_printers TEXT,
+    pending_key_id TEXT,
+    pending_key_hash TEXT
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS printdock_agents_pending_key_id ON printdock_agents (pending_key_id);
 
 CREATE TABLE IF NOT EXISTS printdock_jobs (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
