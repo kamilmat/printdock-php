@@ -12,6 +12,10 @@ namespace PrintDock\Server\Domain;
  * `printer_id`; roles are only a way for the host to pick one when enqueueing.
  *
  * `fit` and `rotate` are the printer's defaults for PDF jobs that do not set them (section 9.2, {@see PdfOptions}).
+ *
+ * An `ipp` printer's `address` is its URI (`ipp://host[:port]/path` or `ipps://…`, {@see IppUri}); one that names an
+ * IP address outside the local network is refused here, a host name is left to the agent, which checks what it
+ * resolves to before connecting.
  */
 final class Printer
 {
@@ -34,6 +38,9 @@ final class Printer
     ) {
         PdfOptions::fit($fit);
         $this->rotate = PdfOptions::rotate($rotate);
+        if (PrinterTransport::Ipp === $transport && null !== $address) {
+            IppUri::check($address);
+        }
     }
 
     /**
@@ -46,7 +53,7 @@ final class Printer
         if (null !== ($data['transport'] ?? null) || $requireTransport) {
             $raw = Input::requiredString($data, 'transport');
             $transport = PrinterTransport::tryFrom($raw)
-                ?? throw new \InvalidArgumentException('transport must be socket, spooler or cups');
+                ?? throw new \InvalidArgumentException('transport must be socket, spooler, cups or ipp');
         }
 
         return new self(

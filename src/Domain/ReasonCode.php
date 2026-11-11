@@ -19,6 +19,9 @@ final class ReasonCode
         'unsupported_queue', 'print_timeout', 'spool_timeout', 'printer_unreachable', 'printer_io_error',
         'bad_printer_address', 'spooler_error', 'driver_error', 'cups_error', 'render_error',
         'print_process_failed', 'content_unavailable', 'agent_stopped', 'internal_error', 'printer_error',
+        'unknown_queue', 'queue_not_accepting', 'bad_file', 'cups_interrupted', 'cancelled_in_queue', 'spool_error',
+        'spool_lost', 'spooler_unavailable',
+        'media_empty', 'media_jam', 'printer_offline', 'printer_stopped', 'unsupported_document', 'unsupported_media',
     ];
 
     /**

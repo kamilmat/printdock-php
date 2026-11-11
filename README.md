@@ -246,6 +246,14 @@ foreign server: `python3 tests/conformance/server_conformance.py --url … --key
 
 ## Changes in 0.7
 
+- **Transport `ipp`** (PROTOCOL 9.5, added to PAP/1 without a version change): `PrinterTransport::Ipp`, a network
+  printer the agent prints to directly over IPP, without a system driver (office A4 printers and IPP label printers).
+  `address` is the printer URI `ipp://host[:port]/path` or `ipps://…`, checked by `IppUri::check()` when a `Printer`
+  is built: an IP literal must be on the local network (loopback, link-local, RFC 1918, IPv6 ULA), a host name is left
+  to the agent. Configure it only for agents whose `capabilities.transports` lists `ipp` (PrintDock agent 0.7.0+).
+  New reason codes the agent may send: `media_empty`, `media_jam`, `printer_offline`, `printer_stopped`,
+  `unsupported_document`, `unsupported_media` (stored like any other code). The scan result may carry `ipp_uri` per
+  printer (kept verbatim).
 - **"At most once" delivery**: `NewJob::$redeliverAfterLeaseExpiry` (default `true`, as before); new column
   `printdock_jobs.redeliver_after_lease_expiry`, `ReasonCode::LEASE_EXPIRED`. Host's own repositories: store the key
   `redeliver_after_lease_expiry` from `JobData` on insert (it does not change later).
